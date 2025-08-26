@@ -2,7 +2,6 @@ import json
 
 from openai import OpenAI
 
-
 def get_current_weather(location, unit="fahrenheit"):
     if "tokyo" in location.lower():
         return json.dumps(
