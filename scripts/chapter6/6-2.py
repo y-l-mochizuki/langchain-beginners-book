@@ -7,6 +7,8 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_text_splitters import CharacterTextSplitter
 from pydantic import BaseModel, Field
 
+from scripts.chapter6.utils import reciprocal_rank_fusion, rerank
+
 
 def file_filter(file_path: str) -> bool:
     return file_path.endswith('.mdx')
@@ -64,7 +66,7 @@ retriever = db.as_retriever()
 # hyde_rag_chain.invoke("LangChainの概要を教えて")
 
 
-# 複数の検索エリ生成
+# 複数の検索クエリ生成
 class QueryGenerationOutput(BaseModel):
     queries: list[str] = Field(..., description='検索クエリのリスト')
 
@@ -80,9 +82,24 @@ query_generation_chain = (query_generation_prompt |
                           model.with_structured_output(QueryGenerationOutput) |
                           (lambda x: x.queries))
 
-multi_query_rag_chain: Runnable = {
-    "question": RunnablePassthrough(),
-    "context": query_generation_chain | retriever.map(),
-} | prompt | model | StrOutputParser()
+# multi_query_rag_chain: Runnable = {
+#     "question": RunnablePassthrough(),
+#     "context": query_generation_chain | retriever.map(),
+# } | prompt | model | StrOutputParser()
 
-multi_query_rag_chain.invoke("LangChainの概要を教えて")
+# multi_query_rag_chain.invoke("LangChainの概要を教えて")
+
+# rag fusion
+# rag_fusion_chain: Runnable = {
+#     "question": RunnablePassthrough(),
+#     "context": query_generation_chain | retriever.map() | reciprocal_rank_fusion,
+# } | prompt | model | StrOutputParser()
+
+# rag_fusion_chain.invoke("langchainの概要を教えて")
+
+rerank_rag_chain: Runnable = ({
+    "question": RunnablePassthrough(),
+    "documents": retriever
+} | RunnablePassthrough.assign(context=rerank)) | prompt | model | StrOutputParser()
+
+rerank_rag_chain.invoke("LangChainの概要を教えて")
