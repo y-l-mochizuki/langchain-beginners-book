@@ -1,22 +1,29 @@
+import asyncio
 from typing import Any
 
+from chromadb.config import Settings
 from langchain_chroma import Chroma
 from langchain_community.document_loaders import GitLoader
 from langchain_core.embeddings import Embeddings
 from langchain_core.language_models import BaseChatModel
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import (Runnable, RunnableParallel, RunnablePassthrough)
+from langchain_core.runnables import RunnableParallel, RunnablePassthrough
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_text_splitters import CharacterTextSplitter
 from langsmith import Client
 from langsmith.evaluation import evaluate
 from langsmith.schemas import Example, Run
 from ragas.embeddings import LangchainEmbeddingsWrapper
 from ragas.llms import LangchainLLMWrapper
-from ragas.metrics import answer_relevancy, context_precsion
+from ragas.metrics import answer_relevancy, context_precision
 from ragas.metrics.base import Metric, MetricWithEmbeddings, MetricWithLLM
 from ragas.testset.evolutions import multi_context, reasoning, simple
 from ragas.testset.generator import TestsetGenerator
+
+LLM_MODEL = "gpt-4o-mini"
+EMBEDDINGS_MODEL = "text-embedding-3-small"
+DATA_SET_NAME = "agent-book"
 
 
 # GitHubリポジトリから特定の拡張子のファイルのみを対象にするフィルタ関数
@@ -31,7 +38,11 @@ loader = GitLoader(
     branch="master",
     file_filter=file_filter)
 
-documents = loader.load()
+raw_documents = loader.load()
+
+# トークンデカすぎてエラーになるので分割する
+splitter = CharacterTextSplitter(chunk_size=800, chunk_overlap=120, separator="\n\n")
+documents = splitter.split_documents(raw_documents)
 
 # Ragasによる合成テストデータの作成
 for document in documents:
@@ -40,10 +51,6 @@ for document in documents:
 
 # Google Colab等で非同期処理を実行できるようにする。（この環境では不要かも）
 # nest_asyncio.apply()
-
-LLM_MODEL = "gpt-4o-mini"  # 書籍では gpt-4o だが rate limit が厳しいため gpt-4o-mini に変更
-EMBEDDINGS_MODEL = "text-embedding-3-small"
-DATA_SET_NAME = "agent-book"
 
 # Ragasの合成テストデータ生成機能の初期化
 generator = TestsetGenerator.from_langchain(
@@ -58,8 +65,7 @@ testset = generator.generate_with_langchain_docs(
         simple: 0.5,  # 単純な質問の割合
         reasoning: 0.25,  # 回答に推論が必要な質問の割合
         multi_context: 0.25,  # 回答に複雑な情報源が必要な質問の割合（RAG前提か）
-    },
-)
+    })
 
 # testset.to_pandas()  # PandasのDataFrameという見やすい表形式に変換して表示し、その内容や品質を簡単に確認することができる
 
@@ -107,9 +113,6 @@ client.create_examples(inputs=inputs, outputs=outputs, metadatas=metadatas, data
 # | 検索＋生成 | Answer similarity（回答の類似性）                       | 実際の回答と期待する回答の、埋め込みベクトルのコサイン類似度                                    |          | ○                |
 # | 検索＋生成 | Answer correctness（回答の正確性）                      | 実際の回答と期待する回答の、事実性（faithfulness）と意味的類似性（Answer similarity）の加重平均  | ○        | ○                |
 
-# def my_evaluator(run: Run, example: Example) -> dict[str, Any]:
-#     return {"key": "sample_metric", "score": 1}
-
 
 # Ragasのメトリクスを使ってLangSmithの実行結果を評価するクラス
 class RagasMetricEvaluator:
@@ -135,14 +138,28 @@ class RagasMetricEvaluator:
             raise ValueError("Example outputs is None")
 
         # LangSmithの検索結果（Documentオブジェクト）からテキスト部分を抽出
-        context_strs = [doc.page_content for doc in run.outputs["contexts"]]
-        # Ragasメトリクスで評価実行（質問、実際の回答、検索結果、正解を渡す）
-        score = self.metric.score({
-            "question": example.inputs["question"],  # 質問
-            "answer": run.outputs["answer"],  # 実際の回答
-            "contexts": context_strs,  # 実際の検索結果
-            "ground_truth": example.outputs["ground_truth"],  # 期待する回答
-        })
+        # context_strs = [doc.page_content for doc in run.outputs["contexts"]]
+        # # Ragasメトリクスで評価実行（質問、実際の回答、検索結果、正解を渡す）
+        # score = self.metric.score({
+        #     "question": example.inputs["question"],  # 質問
+        #     "answer": run.outputs["answer"],  # 実際の回答
+        #     "contexts": context_strs,  # 実際の検索結果
+        #     "ground_truth": example.outputs["ground_truth"],  # 期待する回答
+        # })
+
+        payload = {
+            "question": example.inputs["question"],
+            "answer": run.outputs["answer"],
+            "contexts": [doc.page_content for doc in run.outputs["contexts"]],
+            "ground_truth": example.outputs["ground_truth"],
+        }
+
+        # ★ ここで ascore を asyncio.run で回す
+        if hasattr(self.metric, "ascore"):
+            score = asyncio.run(self.metric.ascore(payload))
+        else:
+            # 非同期APIが無い場合のフォールバック
+            score = self.metric.score(payload)
 
         # LangSmith用の評価結果形式で返す
         return {"key": self.metric.name, "score": score}
@@ -150,7 +167,7 @@ class RagasMetricEvaluator:
 
 # 料金節約のため評価対象を絞る
 metrics = [
-    context_precsion,  # 質問と期待する回答を踏まえて、実際の検索結果のうち有用だと LLM で推論される割合
+    context_precision,  # 質問と期待する回答を踏まえて、実際の検索結果のうち有用だと LLM で推論される割合
     answer_relevancy  # 実際の回答が質問にどれだけ関連するか
 ]
 
@@ -158,7 +175,9 @@ llm = ChatOpenAI(model=LLM_MODEL, temperature=0)
 embeddings = OpenAIEmbeddings(model=EMBEDDINGS_MODEL)
 # 各メトリクスに対してRagasMetricEvaluatorを作成し、その評価関数をリスト化
 evaluators = [RagasMetricEvaluator(metric, llm, embeddings).evaluate for metric in metrics]
-db = Chroma.from_documents(documents, embeddings)
+db = Chroma.from_documents(documents,
+                           embeddings,
+                           client_settings=Settings(anonymized_telemetry=False))
 prompt = ChatPromptTemplate.from_template('''\
 以下の文脈だけを踏まえて質問に回答してください
 文脈: """
@@ -176,6 +195,7 @@ chain = RunnableParallel({
 }).assign(answer=prompt | model | StrOutputParser())
 
 
+# evaluateが期待するキーを返す
 def predict(inputs: dict[str, Any]) -> dict[str, Any]:
     question = inputs["question"]
     output = chain.invoke(question)
@@ -187,6 +207,7 @@ def predict(inputs: dict[str, Any]) -> dict[str, Any]:
 
 evaluate(
     predict,
-    data=DATA_SET_NAME,  # データセット名
+    data=DATA_SET_NAME,
     evaluators=evaluators,
+    max_concurrency=1,
 )
