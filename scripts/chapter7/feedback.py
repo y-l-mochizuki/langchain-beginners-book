@@ -12,6 +12,8 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_text_splitters import CharacterTextSplitter
 from langsmith import Client
 
+LLM_MODEL = "gpt-3.5-turbo"
+
 
 def file_filter(file_path: str) -> bool:
     return file_path.endswith('.mdx')
@@ -39,46 +41,48 @@ prompt = ChatPromptTemplate.from_template('''\
 質問：{question}
 ''')
 
-model = ChatOpenAI(model="gpt-4o-mini", temperature=0.0)
+model = ChatOpenAI(model=LLM_MODEL, temperature=0.0)
 retriever = db.as_retriever()
 chain: Runnable = ({
     "question": RunnablePassthrough(),
     "context": retriever,
 }) | prompt | model | StrOutputParser()
 
+# UI確認できないのでやらない
+# def display_feedback_buttons(run_id: UUID) -> None:
+#     good_button = widgets.Button(
+#         description="Good",
+#         button_style="success",
+#         icon="thumbs-up",
+#     )
+#     bad_button = widgets.Button(
+#         description="Bad",
+#         button_style="danger",
+#         icon="thumbs-down",
+#     )
 
-def display_feedback_buttons(run_id: UUID) -> None:
-    good_button = widgets.Button(
-        description="Good",
-        button_style="success",
-        icon="thumbs-up",
-    )
-    bad_button = widgets.Button(
-        description="Bad",
-        button_style="danger",
-        icon="thumbs-down",
-    )
+#     def on_button_clicked(button: widgets.Button) -> None:
+#         if button.description == "Good":
+#             score = 1
+#         elif button.description == "Bad":
+#             score = 0
+#         else:
+#             raise ValueError("Unknown button: {button}")
 
-    def on_button_clicked(button: widgets.Button) -> None:
-        if button.description == "Good":
-            score = 1
-        elif button.description == "Bad":
-            score = 0
-        else:
-            raise ValueError("Unknown button: {button}")
+#         client = Client()
+#         client.create_feedback(run_id=run_id, key="thumbs", score=score)
+#         print("フィードバックを保存しました")
 
-        client = Client()
-        client.create_feedback(run_id=run_id, key="thumbs", score=score)
-        print("フィードバックを保存しました")
-
-    good_button.on_click(on_button_clicked)
-    bad_button.on_click(on_button_clicked)
-    display(good_button, bad_button)
-
+#     good_button.on_click(on_button_clicked)
+#     bad_button.on_click(on_button_clicked)
+#     display(good_button, bad_button)
 
 with collect_runs() as runs_cb:
     output = chain.invoke("LangChainの概要を教えて")
-    print(output["answer"])
-    run_id = runs_cb[0].traced_runs[0].id
+    print(output)
+    run_id = runs_cb.traced_runs[0].id
 
-display_feedback_buttons(run_id)
+# display_feedback_buttons(run_id)
+
+client = Client()
+client.create_feedback(run_id=run_id, key="thumbs", score=1)

@@ -21,7 +21,7 @@ from ragas.metrics.base import Metric, MetricWithEmbeddings, MetricWithLLM
 from ragas.testset.evolutions import multi_context, reasoning, simple
 from ragas.testset.generator import TestsetGenerator
 
-LLM_MODEL = "gpt-4o-mini"
+LLM_MODEL = "gpt-3.5-turbo"
 EMBEDDINGS_MODEL = "text-embedding-3-small"
 DATA_SET_NAME = "agent-book"
 
@@ -40,7 +40,7 @@ loader = GitLoader(
 
 raw_documents = loader.load()
 
-# トークンデカすぎてエラーになるので分割する
+# # トークンデカすぎてエラーになるので分割する
 splitter = CharacterTextSplitter(chunk_size=800, chunk_overlap=120, separator="\n\n")
 documents = splitter.split_documents(raw_documents)
 
