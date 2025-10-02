@@ -1,6 +1,7 @@
 # Python標準ライブラリのインポート
 import operator  # operator.addを使用してリストの結合操作を定義するため
 import os  # 環境変数を扱うため
+import sqlite3  # SQLiteデータベース接続用
 from pprint import pprint  # チェックポイントのデータを整形して表示するため
 from typing import Annotated, Any, TypedDict  # 型ヒントを定義するため
 
@@ -20,6 +21,7 @@ from langchain_openai import ChatOpenAI  # OpenAI APIと通信するためのLLM
 # LangGraph関連のインポート（ステートフルなワークフロー管理用）
 from langgraph.checkpoint.base import BaseCheckpointSaver  # チェックポイントの基底クラス
 from langgraph.checkpoint.memory import MemorySaver  # メモリベースのチェックポイント保存
+from langgraph.checkpoint.sqlite import SqliteSaver  # SQLiteベースのチェックポイント保存
 from langgraph.graph import END, StateGraph  # グラフベースのワークフロー定義
 
 # Pydanticのインポート（データバリデーション用）
@@ -147,7 +149,9 @@ graph.add_edge("llm_response", END)  # llm_response → 終了
 # 「MemorySaver」= コンピュータのメモリ（RAM）に状態を一時保存するクラス
 # メモリ保存は高速だが、プログラム終了時にデータが消える
 # 本番環境では「PostgresSaver」などのデータベース保存を使用して永続化する
-checkpointer = MemorySaver()
+# checkpointer = MemorySaver()  # インメモリ
+conn = sqlite3.connect("checkpoint.db", check_same_thread=False)
+checkpointer = SqliteSaver(conn)  # SQLiteベース
 
 # グラフをコンパイルして実行可能な形式に変換
 # 「コンパイル」= グラフ定義を実際に実行可能な形式に変換すること
@@ -165,19 +169,11 @@ config = {"configurable": {"thread_id": "example-1"}}
 # ユーザーのクエリを辞書として作成
 # TypedDictベースのStateは辞書として扱う
 # ユーザーの入力テキストをqueryフィールドに設定
-user_query = {"query": "私の好きなものは、ずんだ餅です。覚えておいてね。", "messages": []}
-first_response = compiled_graph.invoke(user_query, config)
-print("初回応答:", first_response)
 
-# 保存されたチェックポイントの一覧を表示
-# 「checkpointer.list()」= 指定したセッション（thread_id）の全チェックポイントを取得
-# 各ノード実行後の状態が時系列で確認でき、デバッグや動作確認に役立つ
-# 各チェックポイントには、その時点でのStateとメタデータが含まれる
-# for checkpoint in checkpointer.list(config):
-#     print(checkpoint)
-
-# チェックポイントの内容を表示する（ヘルパー関数を使用）
-# print_checkpoint_dump(checkpointer, config)
+# 1回目のクエリ実行
+# user_query = {"query": "私の好きなものは、ずんだ餅です。覚えておいてね。", "messages": []}
+# first_response = compiled_graph.invoke(user_query, config)
+# print("初回応答:", first_response)
 
 # 2回目のクエリ実行（同じthread_idなので前回の会話履歴が保持される）
 user_query = {"query": "私の好物は何か覚えてる？"}

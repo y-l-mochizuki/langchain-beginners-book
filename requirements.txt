@@ -29,3 +29,4 @@ autogen-ext[openai]
 # LangGraph は 0.2 系
 langgraph>=0.2.22
 langgraph-checkpoint==1.0.11
+langgraph-checkpoint-sqlite==1.0.4
