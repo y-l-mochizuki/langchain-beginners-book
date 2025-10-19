@@ -66,12 +66,19 @@ class PersonaGenerator:
                 "system",
                 "あなたはユーザーインタビュー用の多様なペルソナを作成する専門家です。",
             ),
-            (
-                "human",
-                f"以下のユーザーリクエストに関するインタビュー用に、{self.k}人の多様なペルソナを生成してください。\n\n"
-                "ユーザーリクエスト: {user_request}\n\n"
-                "各ペルソナには名前と簡単な背景を含めてください。年齢、性別、職業、技術的専門知識において多様性を確保してください。",
-            ),
+            ("human", f"以下のユーザーリクエストに関するインタビュー用に、{self.k}人の多様なペルソナを生成してください。\n\n"
+             "ユーザーリクエスト: {user_request}\n\n"
+             "各ペルソナは以下の要素を含む具体的な背景を持つこと:\n"
+             "- 年齢、性別、職業\n"
+             "- そのドメインにおける専門知識レベル（初心者/中級/専門家）\n"
+             "- 具体的な課題や関心事\n"
+             "- 技術リテラシー\n\n"
+             "多様性の観点:\n"
+             "- エンドユーザー（実際に使う人）\n"
+             "- ビジネス視点（経営者、マネージャー）\n"
+             "- 技術視点（エンジニア、セキュリティ専門家）\n"
+             "- 運用視点（サポート担当、運用管理者）\n"
+             "- 規制・コンプライアンス視点\n"),
         ])
         # ペルソナ生成のためのチェーンを作成
         chain = prompt | self.llm
@@ -87,67 +94,65 @@ class PersonaGenerator:
 # インタビューを実施するクラス
 class InterviewConductor:
 
-    def __init__(self, llm: ChatOpenAI):
+    def __init__(self, llm: ChatOpenAI, depth: int = 3):
         self.llm = llm
+        self.depth = depth  # 深堀り回数
 
     def run(self, user_request: str, personas: list[Persona]) -> InterviewResult:
-        # ペルソナごとに質問を生成
-        questions = self._generate_questions(user_request=user_request, personas=personas)
-        # 各質問に対してペルソナとして回答を生成
-        answers = self._generate_answers(personas=personas, questions=questions)
-        # ペルソナ・質問・回答を組み合わせてインタビューオブジェクトを作成
-        interviews = self._create_interviews(personas=personas,
-                                             questions=questions,
-                                             answers=answers)
-        # インタビュー結果を返す
-        return InterviewResult(interviews=interviews)
+        all_interviews = []
 
-    def _generate_questions(self, user_request: str, personas: list[Persona]) -> list[str]:
-        question_prompt = ChatPromptTemplate.from_messages([
-            ("system", "あなたはユーザー要件に基づいて適切な質問を生成する専門化です"),
-            ("human", "以下のペルソナに関連するユーザーリクエストについて、一つの質問を生成してください。\n\n"
+        for persona in personas:
+            # 初回質問
+            question = self._ask(user_request, persona)
+            answer = self._answer(persona, question)
+            all_interviews.append(Interview(persona=persona, question=question, answer=answer))
+
+            # 深堀りループ
+            for _ in range(self.depth - 1):
+                question = self._follow_up(question, answer)
+                answer = self._answer(persona, question)
+                all_interviews.append(Interview(persona=persona, question=question, answer=answer))
+
+        return InterviewResult(interviews=all_interviews)
+
+    def _ask(self, user_request: str, persona: Persona) -> str:
+        """初回質問生成"""
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", "あなたはユーザー要件に基づいて適切な質問を生成する専門家です"),
+            ("human", "以下のペルソナに対する質問を1つ生成してください。\n\n"
              "ユーザーリクエスト: {user_request}\n"
              "ペルソナ: {persona_name} - {persona_background}\n\n"
              "質問は具体的で、このペルソナの視点から重要な情報を引き出すように設計してください")
         ])
-
-        # 質問生成のためのチェーン作成
-        question_chain = question_prompt | self.llm | StrOutputParser()
-
-        question_queries = [{
+        chain = prompt | self.llm | StrOutputParser()
+        return chain.invoke({
             "user_request": user_request,
             "persona_name": persona.name,
             "persona_background": persona.background
-        } for persona in personas]
+        })
 
-        # 1つのチェインに対して複数の入力をbatchで渡して並列的に実行する
-        return question_chain.batch(question_queries)
+    def _follow_up(self, prev_question: str, prev_answer: str) -> str:
+        """フォローアップ質問（深堀り）"""
+        prompt = ChatPromptTemplate.from_messages([("system", "あなたは深堀りインタビューの専門家です"),
+                                                   ("human", "前回の質問: {prev_question}\n"
+                                                    "前回の回答: {prev_answer}\n\n"
+                                                    "この回答をさらに深堀りする質問を1つ生成してください。"
+                                                    "「なぜ」「どのように」「具体的には」といった観点で掘り下げてください。")])
+        chain = prompt | self.llm | StrOutputParser()
+        return chain.invoke({"prev_question": prev_question, "prev_answer": prev_answer})
 
-    def _generate_answers(self, personas: list[Persona], questions: list[str]) -> list[str]:
-        answer_prompt = ChatPromptTemplate.from_messages([(
-            "system",
-            "あなたは以下のペルソナとして回答しています: {persona_name} - {persona_background}",
-        ), ("human", "質問: {question}")])
-
-        # 回答生成のためのチェイン作成
-        answer_chain = answer_prompt | self.llm | StrOutputParser()
-
-        # 各ペルソナに対する回答クエリの生成
-        answer_queries = [{
+    def _answer(self, persona: Persona, question: str) -> str:
+        """回答生成"""
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", "あなたは以下のペルソナです: {persona_name} - {persona_background}"),
+            ("human", "{question}")
+        ])
+        chain = prompt | self.llm | StrOutputParser()
+        return chain.invoke({
             "persona_name": persona.name,
             "persona_background": persona.background,
             "question": question
-        } for persona, question in zip(personas, questions)]
-
-        # 回答をバッチ処理で生成
-        return answer_chain.batch(answer_queries)
-
-    def _create_interviews(self, personas: list[Persona], questions: list[str],
-                           answers: list[str]) -> list[Interview]:
-        return [
-            Interview(persona=persona, question=question, answer=answer)
-            for persona, question, answer in zip(personas, questions, answers)
-        ]
+        })
 
 
 # インタビュー内容を評価するクラス
@@ -220,9 +225,10 @@ class RequirementsDocumentGenerator:
 
 class DocumentationAgent:
 
-    def __init__(self, llm: ChatOpenAI, k: Optional[int] = None):
+    def __init__(self, llm: ChatOpenAI, k: Optional[int] = None, depth: int = 3):
         self.persona_generator = PersonaGenerator(llm=llm, k=k)  # 多様なペルソナを生成
-        self.interview_conductor = InterviewConductor(llm=llm)  # ペルソナに対してインタビューを実施
+        self.interview_conductor = InterviewConductor(llm=llm,
+                                                      depth=depth)  # ペルソナに対してインタビューを実施（深堀り）
         self.information_evaluator = InformationEvaluator(llm=llm)  # インタビュー結果が要件定義に十分か評価
         self.requirements_doc_generator = RequirementsDocumentGenerator(
             llm=llm)  # インタビュー結果から要件文書を生成
@@ -295,9 +301,11 @@ def main():
     parser = argparse.ArgumentParser(description="ユーザー要求に基づいて要件定義を生成します")
     parser.add_argument("--task", type=str, help="作成したいアプリケーションについて記載してください")
     parser.add_argument("--k", type=str, default="5", help="生成するペルソナの数を設定してください（デフォルト: 5）")
+    parser.add_argument("--depth", type=int, default=3, help="インタビューの深堀り回数を設定してください（デフォルト: 3）")
     args = parser.parse_args()
-    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.0)
-    agent = DocumentationAgent(llm=llm, k=args.k)
+    # llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.0)
+    llm = ChatOpenAI(model="gpt-5-2025-08-07", temperature=1)
+    agent = DocumentationAgent(llm=llm, k=args.k, depth=args.depth)
     final_output = agent.run(user_request=args.task)
 
     # 最終的な出力を表示する
